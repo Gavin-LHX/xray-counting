@@ -11,10 +11,13 @@ TOP_N="${TOP_N:-10}"
 PID_FILE="/tmp/xray_dashboard.pid"
 RUN_LOG="/root/xray_dashboard.log"
 
-ACME_TOOL="${ACME_TOOL:-auto}"         # auto|acme.sh|certbot
-ACME_DOMAIN="${ACME_DOMAIN:-}"         # 可通过环境变量传入
-ACME_EMAIL="${ACME_EMAIL:-}"           # 可选
+ACME_TOOL="${ACME_TOOL:-auto}"               # auto|acme.sh|certbot
+ACME_DOMAIN="${ACME_DOMAIN:-}"
+ACME_EMAIL="${ACME_EMAIL:-}"
 ACME_SERVER="${ACME_SERVER:-letsencrypt}"
+ACME_DNS_PROVIDER="${ACME_DNS_PROVIDER:-}"   # e.g. dns_cf, dns_dp
+ACME_DNS_SLEEP="${ACME_DNS_SLEEP:-120}"      # DNS propagation seconds
+ACME_WILDCARD="${ACME_WILDCARD:-0}"          # 1 = issue *.domain
 
 cmd="${1:-start}"
 
@@ -45,9 +48,31 @@ is_running() {
   return 1
 }
 
+ensure_acme_sh() {
+  local email="$1"
+  local acme_bin=""
+
+  if command -v acme.sh >/dev/null 2>&1; then
+    acme_bin="$(command -v acme.sh)"
+  elif [[ -x "$HOME/.acme.sh/acme.sh" ]]; then
+    acme_bin="$HOME/.acme.sh/acme.sh"
+  else
+    echo "???? acme.sh?????..."
+    curl -fsSL https://get.acme.sh | sh -s email="$email"
+    acme_bin="$HOME/.acme.sh/acme.sh"
+  fi
+
+  if [[ ! -x "$acme_bin" ]]; then
+    echo "acme.sh ????"
+    return 1
+  fi
+
+  echo "$acme_bin"
+}
+
 start() {
   if is_running; then
-    echo "网站已在运行，PID: $(cat "$PID_FILE")"
+    echo "???????PID: $(cat "$PID_FILE")"
     exit 0
   fi
 
@@ -55,11 +80,11 @@ start() {
   scheme="http"
   if [[ "$HTTPS_ENABLE" == "1" ]]; then
     if [[ ! -f "$SSL_CERT" ]]; then
-      echo "启动失败：证书文件不存在 -> $SSL_CERT"
+      echo "???????????? -> $SSL_CERT"
       exit 1
     fi
     if [[ ! -f "$SSL_KEY" ]]; then
-      echo "启动失败：私钥文件不存在 -> $SSL_KEY"
+      echo "???????????? -> $SSL_KEY"
       exit 1
     fi
     extra_args+=(--ssl-cert "$SSL_CERT" --ssl-key "$SSL_KEY")
@@ -71,18 +96,18 @@ start() {
   sleep 1
 
   if is_running; then
-    echo "启动成功"
-    echo "访问地址: ${scheme}://$(public_ip):$PORT"
-    echo "日志文件: $RUN_LOG"
+    echo "????"
+    echo "????: ${scheme}://$(public_ip):$PORT"
+    echo "????: $RUN_LOG"
   else
-    echo "启动失败，请检查日志: $RUN_LOG"
+    echo "??????????: $RUN_LOG"
     exit 1
   fi
 }
 
 stop() {
   if ! is_running; then
-    echo "网站未运行"
+    echo "?????"
     rm -f "$PID_FILE"
     return 0
   fi
@@ -93,38 +118,24 @@ stop() {
     kill -9 "$pid" || true
   fi
   rm -f "$PID_FILE"
-  echo "已停止"
+  echo "???"
 }
 
 status() {
   if is_running; then
     pid="$(cat "$PID_FILE")"
-    echo "运行中，PID: $pid"
+    echo "????PID: $pid"
     ss -lntp | grep ":$PORT" || true
   else
-    echo "未运行"
+    echo "???"
   fi
 }
 
-acme_with_acmesh() {
+acme_with_acmesh_standalone() {
   local domain="$1"
   local email="$2"
-  local acme_bin=""
-
-  if command -v acme.sh >/dev/null 2>&1; then
-    acme_bin="$(command -v acme.sh)"
-  elif [[ -x "$HOME/.acme.sh/acme.sh" ]]; then
-    acme_bin="$HOME/.acme.sh/acme.sh"
-  else
-    echo "未检测到 acme.sh，开始安装..."
-    curl -fsSL https://get.acme.sh | sh -s email="$email"
-    acme_bin="$HOME/.acme.sh/acme.sh"
-  fi
-
-  if [[ ! -x "$acme_bin" ]]; then
-    echo "acme.sh 安装失败"
-    return 1
-  fi
+  local acme_bin
+  acme_bin="$(ensure_acme_sh "$email")"
 
   if [[ -n "$email" ]]; then
     "$acme_bin" --register-account -m "$email" --server "$ACME_SERVER" || true
@@ -137,7 +148,40 @@ acme_with_acmesh() {
     --fullchain-file "$SSL_CERT"
 
   chmod 600 "$SSL_KEY" "$SSL_CERT"
-  return 0
+}
+
+acme_with_acmesh_dns() {
+  local domain="$1"
+  local email="$2"
+  local acme_bin
+  acme_bin="$(ensure_acme_sh "$email")"
+
+  if [[ -n "$email" ]]; then
+    "$acme_bin" --register-account -m "$email" --server "$ACME_SERVER" || true
+  fi
+
+  "$acme_bin" --set-default-ca --server "$ACME_SERVER"
+
+  local dns_args=()
+  if [[ -n "$ACME_DNS_PROVIDER" ]]; then
+    dns_args=(--dns "$ACME_DNS_PROVIDER")
+  else
+    dns_args=(--dns --yes-I-know-dns-manual-mode-enough-go-ahead-please)
+  fi
+
+  if [[ "$ACME_WILDCARD" == "1" ]]; then
+    "$acme_bin" --issue "${dns_args[@]}" --dnssleep "$ACME_DNS_SLEEP" -d "$domain" -d "*.$domain"
+    "$acme_bin" --install-cert -d "$domain" \
+      --key-file "$SSL_KEY" \
+      --fullchain-file "$SSL_CERT"
+  else
+    "$acme_bin" --issue "${dns_args[@]}" --dnssleep "$ACME_DNS_SLEEP" -d "$domain"
+    "$acme_bin" --install-cert -d "$domain" \
+      --key-file "$SSL_KEY" \
+      --fullchain-file "$SSL_CERT"
+  fi
+
+  chmod 600 "$SSL_KEY" "$SSL_CERT"
 }
 
 acme_with_certbot() {
@@ -146,7 +190,7 @@ acme_with_certbot() {
   local email_args=()
 
   if ! command -v certbot >/dev/null 2>&1; then
-    echo "未检测到 certbot"
+    echo "???? certbot"
     return 1
   fi
 
@@ -161,7 +205,6 @@ acme_with_certbot() {
 
   install -m 600 "/etc/letsencrypt/live/$domain/fullchain.pem" "$SSL_CERT"
   install -m 600 "/etc/letsencrypt/live/$domain/privkey.pem" "$SSL_KEY"
-  return 0
 }
 
 acme() {
@@ -169,48 +212,78 @@ acme() {
   local email="${ACME_EMAIL:-${3:-}}"
 
   if [[ -z "$domain" ]]; then
-    echo "用法: ACME_DOMAIN=example.com ACME_EMAIL=you@example.com bash cxc-web.sh acme"
-    echo "或:   bash cxc-web.sh acme example.com you@example.com"
+    echo "??: ACME_DOMAIN=example.com ACME_EMAIL=you@example.com bash cxc-web.sh acme"
+    echo "?:   bash cxc-web.sh acme example.com you@example.com"
     return 1
   fi
 
-  echo "开始申请 Let's Encrypt 证书，域名: $domain"
-  echo "证书输出: $SSL_CERT"
-  echo "私钥输出: $SSL_KEY"
-  echo "注意：申请时会使用 standalone 模式，需要 80 端口可被外网访问。"
+  echo "???? Let's Encrypt ???standalone????: $domain"
+  echo "????: $SSL_CERT"
+  echo "????: $SSL_KEY"
+  echo "???standalone ???? 80 ?????????"
 
   case "$ACME_TOOL" in
     auto)
       if command -v acme.sh >/dev/null 2>&1 || [[ -x "$HOME/.acme.sh/acme.sh" ]]; then
-        acme_with_acmesh "$domain" "$email"
+        acme_with_acmesh_standalone "$domain" "$email"
       elif command -v certbot >/dev/null 2>&1; then
         acme_with_certbot "$domain" "$email"
       else
-        acme_with_acmesh "$domain" "$email"
+        acme_with_acmesh_standalone "$domain" "$email"
       fi
       ;;
     acme.sh)
-      acme_with_acmesh "$domain" "$email"
+      acme_with_acmesh_standalone "$domain" "$email"
       ;;
     certbot)
       acme_with_certbot "$domain" "$email"
       ;;
     *)
-      echo "ACME_TOOL 仅支持: auto | acme.sh | certbot"
+      echo "ACME_TOOL ???: auto | acme.sh | certbot"
       return 1
       ;;
   esac
 
-  echo "证书申请完成。"
-  echo "现在可以启用 HTTPS："
+  echo "???????"
+  echo "?????? HTTPS?"
+  echo "HTTPS_ENABLE=1 PORT=443 SSL_CERT=$SSL_CERT SSL_KEY=$SSL_KEY bash cxc-web.sh restart"
+}
+
+acme_dns() {
+  local domain="${ACME_DOMAIN:-${2:-}}"
+  local email="${ACME_EMAIL:-${3:-}}"
+
+  if [[ -z "$domain" ]]; then
+    echo "??: ACME_DOMAIN=example.com ACME_EMAIL=you@example.com ACME_DNS_PROVIDER=dns_cf bash cxc-web.sh acme-dns"
+    echo "?:   bash cxc-web.sh acme-dns example.com you@example.com"
+    return 1
+  fi
+
+  echo "???? Let's Encrypt ???DNS ??????: $domain"
+  echo "????: $SSL_CERT"
+  echo "????: $SSL_KEY"
+  if [[ -n "$ACME_DNS_PROVIDER" ]]; then
+    echo "DNS Provider: $ACME_DNS_PROVIDER"
+  else
+    echo "DNS Provider: ???????? ACME_DNS_PROVIDER?"
+  fi
+  if [[ "$ACME_WILDCARD" == "1" ]]; then
+    echo "??????: *.$domain"
+  fi
+
+  acme_with_acmesh_dns "$domain" "$email"
+
+  echo "DNS ?????????"
+  echo "?????? HTTPS?"
   echo "HTTPS_ENABLE=1 PORT=443 SSL_CERT=$SSL_CERT SSL_KEY=$SSL_KEY bash cxc-web.sh restart"
 }
 
 usage() {
-  echo "用法: bash cxc-web.sh {start|stop|restart|status|acme}"
-  echo "HTTP 示例: PORT=8080 TOP_N=10 bash cxc-web.sh start"
-  echo "HTTPS 示例: HTTPS_ENABLE=1 PORT=443 SSL_CERT=/root/fullchain.pem SSL_KEY=/root/privkey.pem bash cxc-web.sh start"
-  echo "ACME 示例: ACME_DOMAIN=example.com ACME_EMAIL=you@example.com bash cxc-web.sh acme"
+  echo "??: bash cxc-web.sh {start|stop|restart|status|acme|acme-dns}"
+  echo "HTTP ??: PORT=8080 TOP_N=10 bash cxc-web.sh start"
+  echo "HTTPS ??: HTTPS_ENABLE=1 PORT=443 SSL_CERT=/root/fullchain.pem SSL_KEY=/root/privkey.pem bash cxc-web.sh start"
+  echo "ACME(80??) ??: ACME_DOMAIN=example.com ACME_EMAIL=you@example.com bash cxc-web.sh acme"
+  echo "ACME(DNS) ??: ACME_DOMAIN=example.com ACME_EMAIL=you@example.com ACME_DNS_PROVIDER=dns_cf bash cxc-web.sh acme-dns"
 }
 
 case "$cmd" in
@@ -219,6 +292,7 @@ case "$cmd" in
   restart) stop; start ;;
   status) status ;;
   acme) acme "$@" ;;
+  acme-dns) acme_dns "$@" ;;
   *)
     usage
     exit 1
