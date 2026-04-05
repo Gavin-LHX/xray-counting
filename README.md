@@ -42,11 +42,9 @@
 
 ### 0) 使用 raw.githubusercontent.com 一键下载
 
-把下面命令里的 `<用户名>` 和 `<仓库名>` 替换成你自己的 GitHub 信息：
-
 ```bash
-wget -O cxc.sh https://raw.githubusercontent.com/<用户名>/<仓库名>/main/cxc.sh
-wget -O count_xray_clients.sh https://raw.githubusercontent.com/<用户名>/<仓库名>/main/count_xray_clients.sh
+wget -O cxc.sh https://raw.githubusercontent.com/Gavin-LHX/xray-counting/main/cxc.sh
+wget -O count_xray_clients.sh https://raw.githubusercontent.com/Gavin-LHX/xray-counting/main/count_xray_clients.sh
 chmod +x cxc.sh count_xray_clients.sh
 ```
 
@@ -78,11 +76,9 @@ bash cxc.sh /var/log/xray/access.log 10
 
 ### 0) 使用 raw.githubusercontent.com 一键下载
 
-把下面命令里的 `<用户名>` 和 `<仓库名>` 替换成你自己的 GitHub 信息：
-
 ```bash
-wget -O xray_dashboard.py https://raw.githubusercontent.com/<用户名>/<仓库名>/main/xray_dashboard.py
-wget -O cxc-web.sh https://raw.githubusercontent.com/<用户名>/<仓库名>/main/cxc-web.sh
+wget -O xray_dashboard.py https://raw.githubusercontent.com/Gavin-LHX/xray-counting/main/xray_dashboard.py
+wget -O cxc-web.sh https://raw.githubusercontent.com/Gavin-LHX/xray-counting/main/cxc-web.sh
 chmod +x cxc-web.sh
 ```
 
