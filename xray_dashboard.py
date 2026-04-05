@@ -3,6 +3,7 @@ import argparse
 import html
 import os
 import re
+import ssl
 from collections import Counter
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -165,6 +166,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_HEAD(self):
+        if self.path not in ("/", "/index.html"):
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = render_page(self.log_file, self.top_n).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+
     def log_message(self, fmt, *args):
         return
 
@@ -179,6 +191,8 @@ def main():
     parser.add_argument("--port", type=int, default=8080, help="listen port")
     parser.add_argument("--log-file", default="/var/log/xray/access.log", help="xray access.log path")
     parser.add_argument("--top", type=int, default=10, help="top n ips")
+    parser.add_argument("--ssl-cert", default="", help="TLS cert path (PEM)")
+    parser.add_argument("--ssl-key", default="", help="TLS private key path (PEM)")
     args = parser.parse_args()
 
     if args.top <= 0:
@@ -188,7 +202,20 @@ def main():
     Handler.top_n = args.top
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Dashboard running on http://{args.host}:{args.port}")
+    scheme = "http"
+    if args.ssl_cert or args.ssl_key:
+        if not (args.ssl_cert and args.ssl_key):
+            raise SystemExit("Both --ssl-cert and --ssl-key are required for HTTPS")
+        if not os.path.isfile(args.ssl_cert):
+            raise SystemExit(f"SSL cert not found: {args.ssl_cert}")
+        if not os.path.isfile(args.ssl_key):
+            raise SystemExit(f"SSL key not found: {args.ssl_key}")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=args.ssl_cert, keyfile=args.ssl_key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+
+    print(f"Dashboard running on {scheme}://{args.host}:{args.port}")
     print(f"log file: {args.log_file}, top: {args.top}")
     server.serve_forever()
 
