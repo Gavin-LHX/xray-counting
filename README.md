@@ -101,6 +101,40 @@ bash cxc-web.sh start
 http://你的服务器IP:8080
 ```
 
+### 1.1) 启用 HTTPS（支持 443）
+
+准备证书后可直接启用 HTTPS。默认环境变量如下：
+
+- `HTTPS_ENABLE=1`
+- `PORT=443`
+- `SSL_CERT=/root/fullchain.pem`
+- `SSL_KEY=/root/privkey.pem`
+
+启动示例：
+
+```bash
+HTTPS_ENABLE=1 PORT=443 SSL_CERT=/root/fullchain.pem SSL_KEY=/root/privkey.pem bash cxc-web.sh restart
+```
+
+浏览器访问：
+
+```text
+https://你的服务器IP:443
+```
+
+如果你是自签名证书，浏览器会提示不受信任，这是正常现象。
+
+### 1.2) 没有证书时快速生成自签名证书（测试用）
+
+```bash
+openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+  -keyout /root/privkey.pem \
+  -out /root/fullchain.pem \
+  -subj "/CN=你的服务器IP或域名"
+```
+
+然后执行上面的 HTTPS 启动命令即可。
+
 ### 2) 常用管理命令
 
 ```bash
@@ -121,11 +155,15 @@ bash cxc-web.sh stop
 
 - `PORT`：监听端口（默认 `8080`）
 - `TOP_N`：TOP 显示数量（默认 `10`）
+- `HTTPS_ENABLE`：是否启用 HTTPS（`1` 启用，默认 `0`）
+- `SSL_CERT`：证书文件路径（默认 `/root/fullchain.pem`）
+- `SSL_KEY`：私钥文件路径（默认 `/root/privkey.pem`）
 
 示例：
 
 ```bash
 PORT=9000 TOP_N=20 bash cxc-web.sh restart
+HTTPS_ENABLE=1 PORT=443 SSL_CERT=/root/fullchain.pem SSL_KEY=/root/privkey.pem TOP_N=20 bash cxc-web.sh restart
 ```
 
 ## 常见问题
